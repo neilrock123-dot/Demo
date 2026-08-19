@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Private demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    min-height: 100svh; display: grid; place-items: center;
+    background: radial-gradient(80% 60% at 50% 20%, #171226 0%, #0b0c14 55%, #08090f 100%);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #e8e6f0; padding: 24px;
+  }
+  .gate { width: min(360px, 100%); text-align: center; }
+  .mark {
+    font-size: 13px; letter-spacing: .42em; text-indent: .42em;
+    color: #8f8aa8; text-transform: uppercase; margin-bottom: 14px;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+  p  { font-size: 14px; color: #a49fbb; margin-bottom: 26px; }
+  form { display: grid; gap: 12px; }
+  input {
+    width: 100%; padding: 13px 16px; font-size: 16px; border-radius: 10px;
+    border: 1px solid #2c2840; background: #141020; color: #e8e6f0; outline: none;
+    text-align: center; letter-spacing: .12em;
+  }
+  input:focus { border-color: #5ad8c6; }
+  button {
+    padding: 13px 16px; font-size: 15px; font-weight: 600; letter-spacing: .06em;
+    border: 0; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(135deg, #f2d377, #cfa64b); color: #221a05;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { min-height: 20px; font-size: 13px; color: #ff8a9e; }
+  .msg.busy { color: #8f8aa8; }
+</style>
+</head>
+<body>
+<div class="gate">
+  <div class="mark">Private preview</div>
+  <h1>This demo is invite-only.</h1>
+  <p>Enter the access phrase you were given.</p>
+  <form id="f">
+    <input id="pw" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Access phrase" autofocus>
+    <button id="go" type="submit">UNLOCK</button>
+    <div class="msg" id="msg"></div>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let payload = null;
+/* the ciphertext is split so each piece fits GitHub's 25MB web-upload cap */
+const fetchPayload = Promise.all(
+  ["payload.part1", "payload.part2"].map(u => fetch(u).then(r => {
+    if (!r.ok) throw new Error(u + " " + r.status);
+    return r.arrayBuffer();
+  }))
+).then(bufs => {
+  const total = bufs.reduce((n, b) => n + b.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const b of bufs) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
+  payload = merged.buffer;
+});
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pw = $("pw").value;
+  if (!pw) return;
+  $("go").disabled = true;
+  $("msg").className = "msg busy";
+  $("msg").textContent = "Unlocking…";
+  try {
+    await fetchPayload;
+    const bytes = new Uint8Array(payload);
+    const salt = bytes.slice(0, 16), iv = bytes.slice(16, 28), data = bytes.slice(28);
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
+    const key = await crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: 600000, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    const html = new TextDecoder().decode(plain);
+    document.open();
+    document.write(html);
+    document.close();
+  } catch (err) {
+    $("go").disabled = false;
+    $("msg").className = "msg";
+    $("msg").textContent = "That phrase didn't unlock it. Check it and try again.";
+    $("pw").select();
+  }
+});
+</script>
+</body>
+</html>
