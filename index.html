@@ -50,6 +50,7 @@
   </form>
 </div>
 <script>
+(() => {
 const $ = (id) => document.getElementById(id);
 let payload = null;
 /* the ciphertext is split so each piece fits GitHub's 25MB web-upload cap */
@@ -93,6 +94,7 @@ $("f").addEventListener("submit", async (e) => {
     $("pw").select();
   }
 });
+})();
 </script>
 </body>
 </html>
