@@ -53,19 +53,37 @@
 (() => {
 const $ = (id) => document.getElementById(id);
 let payload = null;
-/* the ciphertext is split so each piece fits GitHub's 25MB web-upload cap */
-const fetchPayload = Promise.all(
-  ["payload.part1", "payload.part2"].map(u => fetch(u).then(r => {
-    if (!r.ok) throw new Error(u + " " + r.status);
-    return r.arrayBuffer();
-  }))
-).then(bufs => {
-  const total = bufs.reduce((n, b) => n + b.byteLength, 0);
-  const merged = new Uint8Array(total);
-  let off = 0;
-  for (const b of bufs) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
-  payload = merged.buffer;
-});
+let fetching = null;
+/* the ciphertext is split so each piece fits GitHub's 25MB web-upload cap.
+   The download must be RETRYABLE: a Promise made once at load time stays
+   rejected forever after one network hiccup, turning every later attempt
+   into a bogus "wrong phrase" until the page is reloaded. */
+function fetchPayload() {
+  if (payload) return Promise.resolve();
+  if (!fetching) {
+    fetching = Promise.all(
+      ["payload.part1", "payload.part2"].map(u => fetch(u).then(r => {
+        if (!r.ok) throw new Error(u + " " + r.status);
+        return r.arrayBuffer();
+      }))
+    ).then(bufs => {
+      const total = bufs.reduce((n, b) => n + b.byteLength, 0);
+      const merged = new Uint8Array(total);
+      let off = 0;
+      for (const b of bufs) { merged.set(new Uint8Array(b), off); off += b.byteLength; }
+      payload = merged.buffer;
+    }).catch(err => { fetching = null; throw err; });
+  }
+  return fetching;
+}
+fetchPayload().catch(() => {}); /* warm the download; retried on unlock */
+
+const fail = (text) => {
+  $("go").disabled = false;
+  $("msg").className = "msg";
+  $("msg").textContent = text;
+  $("pw").select();
+};
 
 $("f").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -73,9 +91,17 @@ $("f").addEventListener("submit", async (e) => {
   if (!pw) return;
   $("go").disabled = true;
   $("msg").className = "msg busy";
-  $("msg").textContent = "Unlocking…";
+  /* a download failure and a wrong phrase need DIFFERENT advice — collapsing
+     them told people with flaky wifi to retype a phrase that was right */
+  $("msg").textContent = "Downloading the demo…";
   try {
-    await fetchPayload;
+    await fetchPayload();
+  } catch (err) {
+    fail("The download didn't finish — check your connection and try again.");
+    return;
+  }
+  $("msg").textContent = "Unlocking… (a few seconds on phones)";
+  try {
     const bytes = new Uint8Array(payload);
     const salt = bytes.slice(0, 16), iv = bytes.slice(16, 28), data = bytes.slice(28);
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
@@ -88,10 +114,7 @@ $("f").addEventListener("submit", async (e) => {
     document.write(html);
     document.close();
   } catch (err) {
-    $("go").disabled = false;
-    $("msg").className = "msg";
-    $("msg").textContent = "That phrase didn't unlock it. Check it and try again.";
-    $("pw").select();
+    fail("That phrase didn't unlock it. Check it and try again.");
   }
 });
 })();
